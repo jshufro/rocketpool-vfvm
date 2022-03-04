@@ -1,16 +1,18 @@
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <ctype.h>
 
-#include "KeccakHash.h"
+#include "KeccakP-1600-SnP.h"
 
 // ----------- CONFIG VARIABLES -----------
 // This is the prefix you're searching for
 #define PREFIX "0x000001"
 // This is your node wallet address
-#define NODE_ADDRESS "0xbb143cCca153bb8ACFBe02E5d61BCEbf5027C35F"
+#define NODE_ADDRESS "0x152CC1dEb3f343384a5064Aa322c4CFf6b3fFAe8"
 // You MUST generate this using smartnode!
-#define INIT_HASH "0xa1ca25e40fe431d87aa7f9a8b1a74f71505c727c2a5a07a3ae0dfb9760730df0"
+#define INIT_HASH "0xddff5ce23a92998f2b0b270eda7afd877aa25c3df35a384f723656881fab1964"
 // This is the mainnet minipool manager contract address
 #define MINIPOOL_MANAGER_ADDRESS "0x6293b8abc1f36afb22406be5f96d893072a8cf3a"
 // -------------- END CONFIG --------------
@@ -24,27 +26,6 @@
 _Static_assert(sizeof(PREFIX) <= sizeof(NODE_ADDRESS), "Prefix must be at most 20 chars");
 _Static_assert(sizeof(NODE_ADDRESS) == 43, "Invalid node address");
 _Static_assert(sizeof(MINIPOOL_MANAGER_ADDRESS) == 43, "Invalid minipool manager address");
-
-#define KECCAK_INIT(HASHER)						\
-	do {								\
-		if (Keccak_HashInitialize(HASHER,			\
-		    1088, 1600-1088, 32 * 8, 0x01) != KECCAK_SUCCESS)	\
-			return -1;					\
-	} while (0)
-
-#define KECCAK_UPDATE(HASHER, SRC, BYTES)				\
-	do {								\
-		if (Keccak_HashUpdate(&inst, SRC, 8 * BYTES)		\
-		    != KECCAK_SUCCESS)					\
-			return -1;					\
-	} while (0)
-
-#define KECCAK_FINAL(HASHER, DST)					\
-	do {								\
-		if (Keccak_HashFinal(HASHER, DST) !=			\
-		    KECCAK_SUCCESS)					\
-			return -1;					\
-	} while (0)
 
 static unsigned char
 hex_to_char(char in)
@@ -152,8 +133,7 @@ main(void)
 	unsigned char prefix[ADDRESS_BYTES];
 	unsigned char ff = 0xff;
 	const unsigned char *addr;
-	Keccak_HashInstance inst;
-	HashReturn ret;
+	unsigned char state[KeccakP1600_stateSizeInBytes];
 
 	memset(salt, 0, SALT_BYTES);
 
@@ -164,22 +144,42 @@ main(void)
 	parsePrefix(prefix, PREFIX);
 
 	for (;;) {
-		KECCAK_INIT(&inst);
+		size_t offset = 0;
+		KeccakP1600_Initialize(state);
 
-		KECCAK_UPDATE(&inst, node_address, ADDRESS_BYTES);
-		KECCAK_UPDATE(&inst, salt, SALT_BYTES);
-		KECCAK_FINAL(&inst, output);
+		KeccakP1600_AddBytes(state, node_address, offset, ADDRESS_BYTES);
+		offset += ADDRESS_BYTES;
+		KeccakP1600_AddBytes(state, salt, offset, SALT_BYTES);
+		offset += SALT_BYTES;
+		/* Add Padding */
+		KeccakP1600_AddByte(state, 0x01, offset);
+		offset += 1;
+		KeccakP1600_AddByte(state, 0x80, 135);
 
-		KECCAK_INIT(&inst);
-		KECCAK_UPDATE(&inst, &ff, 1);
-		KECCAK_UPDATE(&inst, minipool_manager_address, ADDRESS_BYTES);
-		KECCAK_UPDATE(&inst, output, SALT_BYTES);
-		KECCAK_UPDATE(&inst, init_hash, INIT_HASH_BYTES); 
-		KECCAK_FINAL(&inst, output);
+		KeccakP1600_Permute_24rounds(state);
+		KeccakP1600_ExtractBytes(state, output, 0, 32);
+
+
+		offset = 0;
+		KeccakP1600_Initialize(state);
+		KeccakP1600_AddByte(state, ff, offset);
+		offset += 1;
+		KeccakP1600_AddBytes(state, minipool_manager_address, offset, ADDRESS_BYTES);
+		offset += ADDRESS_BYTES;
+		KeccakP1600_AddBytes(state, output, offset, SALT_BYTES);
+		offset += SALT_BYTES;
+		KeccakP1600_AddBytes(state, init_hash, offset, INIT_HASH_BYTES);
+		offset += INIT_HASH_BYTES;
+		/* Add Padding */
+		KeccakP1600_AddByte(state, 0x01, offset);
+		offset += 1;
+		KeccakP1600_AddByte(state, 0x80, 135);
+
+		KeccakP1600_Permute_24rounds(state);
+		KeccakP1600_ExtractBytes(state, output, 0, 32);
 
 		addr = hash_to_address(output);
 
-		next_salt(salt);
 		if (prefix_cmp(prefix, addr) == 0) {
 			printf("Prefix matched\n");
 			printf("Address: 0x");
@@ -195,6 +195,7 @@ main(void)
 			printf("\n");
 			return 0;
 		}
+		next_salt(salt);
 	}
 
 	return 0;
