@@ -1,10 +1,12 @@
+#include <byteswap.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 
-#include "KeccakP-1600-SnP.h"
+#include "KeccakP-1600-times8-SnP.h"
 
 // ----------- CONFIG VARIABLES -----------
 // This is the prefix you're searching for
@@ -20,6 +22,7 @@
 #define ADDRESS_BYTES 20
 #define SALT_BYTES 32
 #define INIT_HASH_BYTES 32
+#define LANE_SIZE 8
 // In half-bytes
 #define PREFIX_LENGTH (strlen(PREFIX) - 2)
 
@@ -83,7 +86,7 @@ parsePrefix(unsigned char *dst, const char *in)
 
 }
 
-static int
+static inline int
 prefix_cmp(const unsigned char *a, const unsigned char *b)
 {
 	char hi_a;
@@ -98,89 +101,88 @@ prefix_cmp(const unsigned char *a, const unsigned char *b)
 	return (hi_a ^ hi_b) == 0x00 ? 0 : 1;
 }
 
-unsigned char *
+static inline unsigned char *
 hash_to_address(unsigned char result[static SALT_BYTES])
 {
 
 	return result + 12;
 }
 
-void
-next_salt(unsigned char salt[static SALT_BYTES])
+static inline void
+next_salt(unsigned char salt[static SALT_BYTES], uint32_t incr)
 {
-	uint8_t *frags = (uint8_t *)salt;
+	uint64_t hi = bswap_64(*(uint64_t *)(salt + 24));
+	uint64_t mhi = bswap_64(*(uint64_t *)(salt + 16));
+	uint64_t mlo = bswap_64(*(uint64_t *)(salt + 8));
+	uint64_t lo = bswap_64(*(uint64_t *)(salt));
+	uint8_t carry = 0;
 
-	for (size_t i = 32 - 1; i >= 0; i--) {
-		if (frags[i] != UINT8_MAX) {
-			frags[i]++;
-			return;
-		}
-
-		frags[i] = 0;
+	/* hi is the least significant word, since it was highest in memory */
+	if (UINT64_MAX - incr >= hi) {
+		hi += incr;
+		goto store;
 	}
-	exit(1);
-	return;
+
+	hi += incr;
+	incr = 1;
+
+	if (UINT64_MAX - incr >= mhi) {
+		mhi += incr;
+		goto store;
+	}
+
+	mhi += incr;
+
+	if (UINT64_MAX - incr >= mlo) {
+		mlo += incr;
+		goto store;
+	}
+
+	mlo += incr;
+
+	if (UINT64_MAX - incr >= lo) {
+		lo += incr;
+		goto store;
+	}
+
+store:
+	*((uint64_t *)salt) = bswap_64(lo);
+	*((uint64_t *)(salt + 8)) = bswap_64(mlo);
+	*((uint64_t *)(salt + 16)) = bswap_64(mhi);
+	*((uint64_t *)(salt + 24)) = bswap_64(hi);
 }
 
-int
-main(void)
+bool
+iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phase1, unsigned char *phase2, unsigned char *salt)
 {
-	unsigned char salt[SALT_BYTES];
-	unsigned char output[SALT_BYTES];
-	unsigned char node_address[ADDRESS_BYTES];
-	unsigned char minipool_manager_address[ADDRESS_BYTES];
-	unsigned char init_hash[INIT_HASH_BYTES];
-	unsigned char prefix[ADDRESS_BYTES];
-	unsigned char ff = 0xff;
-	const unsigned char *addr;
-	unsigned char state[KeccakP1600_stateSizeInBytes];
+	unsigned char output[SALT_BYTES * 8];
 
-	memset(salt, 0, SALT_BYTES);
+	KeccakP1600times8_InitializeAll(state);
 
-	parse_hex(node_address, NODE_ADDRESS, strlen(NODE_ADDRESS));
-	parse_hex(minipool_manager_address, MINIPOOL_MANAGER_ADDRESS,
-	    strlen(MINIPOOL_MANAGER_ADDRESS));
-	parse_hex(init_hash, INIT_HASH, strlen(INIT_HASH));
-	parsePrefix(prefix, PREFIX);
+	memcpy(phase1 + ADDRESS_BYTES, salt, SALT_BYTES);
+	for (size_t i = 1; i < 8; i++) {
+		memcpy(phase1 + (i * 136) + ADDRESS_BYTES, phase1 + ((i-1) * 136) + ADDRESS_BYTES, SALT_BYTES);
+		next_salt(phase1 + (i * 136) + ADDRESS_BYTES, 1);
+	}
+	KeccakP1600times8_AddLanesAll(state, phase1, 136 / LANE_SIZE, 136 / LANE_SIZE);
+	KeccakP1600times8_PermuteAll_24rounds(state);
+	KeccakP1600times8_ExtractLanesAll(state, output, 4, 4);
 
-	for (;;) {
-		size_t offset = 0;
-		KeccakP1600_Initialize(state);
+	for (size_t i = 0; i < 8; i++) {
+		memcpy(phase2 + (i * 136) + 1 + ADDRESS_BYTES, output + i*32, SALT_BYTES);
+	}
+	KeccakP1600times8_InitializeAll(state);
+	KeccakP1600times8_AddLanesAll(state, phase2, 136 / LANE_SIZE, 136 / LANE_SIZE);
+	KeccakP1600times8_PermuteAll_24rounds(state);
+	KeccakP1600times8_ExtractLanesAll(state, output, 4, 4);
 
-		KeccakP1600_AddBytes(state, node_address, offset, ADDRESS_BYTES);
-		offset += ADDRESS_BYTES;
-		KeccakP1600_AddBytes(state, salt, offset, SALT_BYTES);
-		offset += SALT_BYTES;
-		/* Add Padding */
-		KeccakP1600_AddByte(state, 0x01, offset);
-		offset += 1;
-		KeccakP1600_AddByte(state, 0x80, 135);
+	for (size_t j = 0; j < 8; j++) {
+		const unsigned char *addr;
 
-		KeccakP1600_Permute_24rounds(state);
-		KeccakP1600_ExtractBytes(state, output, 0, 32);
+		addr = hash_to_address(output + 32*j);
 
-
-		offset = 0;
-		KeccakP1600_Initialize(state);
-		KeccakP1600_AddByte(state, ff, offset);
-		offset += 1;
-		KeccakP1600_AddBytes(state, minipool_manager_address, offset, ADDRESS_BYTES);
-		offset += ADDRESS_BYTES;
-		KeccakP1600_AddBytes(state, output, offset, SALT_BYTES);
-		offset += SALT_BYTES;
-		KeccakP1600_AddBytes(state, init_hash, offset, INIT_HASH_BYTES);
-		offset += INIT_HASH_BYTES;
-		/* Add Padding */
-		KeccakP1600_AddByte(state, 0x01, offset);
-		offset += 1;
-		KeccakP1600_AddByte(state, 0x80, 135);
-
-		KeccakP1600_Permute_24rounds(state);
-		KeccakP1600_ExtractBytes(state, output, 0, 32);
-
-		addr = hash_to_address(output);
-
-		if (prefix_cmp(prefix, addr) == 0) {
+		if (__builtin_expect((prefix_cmp(prefix, addr) == 0), 0)) {
+			next_salt(salt, j);
 			printf("Prefix matched\n");
 			printf("Address: 0x");
 			for (size_t i = 0; i < ADDRESS_BYTES; i++)
@@ -193,10 +195,77 @@ main(void)
 				printf("%02x", salt[i]);
 			}
 			printf("\n");
-			return 0;
+			return true;
 		}
-		next_salt(salt);
+	}
+
+	return false;
+}
+
+int
+thread_main(void)
+{
+	unsigned char salt[SALT_BYTES];
+	unsigned char node_address[ADDRESS_BYTES];
+	unsigned char minipool_manager_address[ADDRESS_BYTES];
+	unsigned char init_hash[INIT_HASH_BYTES];
+	unsigned char prefix[ADDRESS_BYTES];
+	unsigned char ff = 0xff;
+	unsigned char *mem = malloc(KeccakP1600times8_statesAlignment + KeccakP1600times8_statesSizeInBytes);
+	unsigned char *state = mem;
+	while ((uintptr_t)state % KeccakP1600times8_statesAlignment != 0)
+		state += 2;
+
+	unsigned char phase1[136 * 8];
+	unsigned char phase2[136 * 8];
+
+	memset(salt, 0, SALT_BYTES);
+	memset(phase1, 0, sizeof(phase1));
+	memset(phase2, 0, sizeof(phase2));
+
+	parse_hex(node_address, NODE_ADDRESS, strlen(NODE_ADDRESS));
+	parse_hex(minipool_manager_address, MINIPOOL_MANAGER_ADDRESS,
+	    strlen(MINIPOOL_MANAGER_ADDRESS));
+	parse_hex(init_hash, INIT_HASH, strlen(INIT_HASH));
+	parsePrefix(prefix, PREFIX);
+
+	/* All ranges left-inclusive only */
+	for (size_t i = 0; i < 8; i++) {
+		/* Bytes 0-20 are address */
+		memcpy(phase1 + i*136, node_address, ADDRESS_BYTES);
+		/* 32 byte hole at 20-52 */
+		/* 1 byte for padding at byte 52 */
+		phase1[i*136 + ADDRESS_BYTES + SALT_BYTES] = 0x01;
+		/* End padding at byte 136 */
+		phase1[i*136 + 135] = 0x80;
+	}
+
+	for (size_t i = 0; i < 8; i++) {
+		/* First byte is 0xff */
+		memcpy(phase2 + i*136, &ff, 1);
+		/* Bytes 1-21 are the minipool mgr address */
+		memcpy(phase2 + i*136 + 1, minipool_manager_address, ADDRESS_BYTES);
+		/* 32 byte hole at bytes 21-53 */
+		/* Bytes 53-85 are init_hash */
+		memcpy(phase2 + i*136 + 1 + ADDRESS_BYTES + SALT_BYTES, init_hash, INIT_HASH_BYTES);
+		/* Byte 85 is padding */
+		phase2[i*136 + 1 + ADDRESS_BYTES + SALT_BYTES + INIT_HASH_BYTES] = 0x01;
+		/* End padding at byte 136 */
+		phase2[i*136 + 135] = 0x80;
+	}
+
+	for (;;) {
+		if (iteration(state, prefix, phase1, phase2, salt))
+			return 0;
+		next_salt(salt, 8);
 	}
 
 	return 0;
+}
+
+int
+main(void)
+{
+
+	return thread_main();
 }
