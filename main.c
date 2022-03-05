@@ -1,5 +1,6 @@
 #include <byteswap.h>
 #include <ctype.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -13,7 +14,7 @@
 
 // ----------- CONFIG VARIABLES -----------
 // This is the prefix you're searching for
-#define PREFIX "0x00000001"
+#define PREFIX "0x000001"
 // This is your node wallet address
 #define NODE_ADDRESS "0x152CC1dEb3f343384a5064Aa322c4CFf6b3fFAe8"
 // You MUST generate this using smartnode!
@@ -42,6 +43,8 @@ struct thread_ctx {
 static unsigned char prefix[ADDRESS_BYTES];
 static bool done = false;
 static uint64_t reported_salt;
+static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t mux = PTHREAD_MUTEX_INITIALIZER;
 
 static unsigned char
 hex_to_char(char in)
@@ -170,6 +173,7 @@ iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phas
 			print_salt(salt);
 			printf("\n");
 			done = true;
+			pthread_cond_signal(&cond);
 			return true;
 		}
 	}
@@ -253,6 +257,7 @@ main(void)
 	size_t nprocs = get_nprocs();
 	uint64_t last_reported_salt = 0;
 	time_t start = time(NULL);
+	struct timespec ts = {};
 
 	printf("Using %lu threads\n", nprocs);
 	pthread_t *threads = calloc(nprocs, sizeof(pthread_t));
@@ -269,10 +274,13 @@ main(void)
 		(void)pthread_create(&threads[i], NULL, thread_main, ctx);
 	}
 
-	while (done == false) {
+	pthread_mutex_lock(&mux);
+	for (;;) {
+		clock_gettime(CLOCK_REALTIME, &ts);
+		ts.tv_sec += 5;
 		time_t iter = time(NULL);
-		sleep(5);
-		{
+		int ret = pthread_cond_timedwait(&cond, &mux, &ts);
+		if (ret == ETIMEDOUT && !done) {
 			time_t end = time(NULL);
 			uint64_t diff = reported_salt - last_reported_salt;
 			float rate = diff / (end - iter);
@@ -284,6 +292,9 @@ main(void)
 			printf("At salt ");
 			print_salt(last_reported_salt);
 			printf("... %0.2fs (%0.2fM salts/sec)\n", elapsed, rate / 1000000);
+		} else if (done) {
+			pthread_mutex_unlock(&mux);
+			break;
 		}
 	}
 
