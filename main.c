@@ -1,16 +1,19 @@
 #include <byteswap.h>
+#include <ctype.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
+#include <sys/sysinfo.h>
+#include <unistd.h>
 
 #include "KeccakP-1600-times8-SnP.h"
 
 // ----------- CONFIG VARIABLES -----------
 // This is the prefix you're searching for
-#define PREFIX "0x000001"
+#define PREFIX "0x00000001"
 // This is your node wallet address
 #define NODE_ADDRESS "0x152CC1dEb3f343384a5064Aa322c4CFf6b3fFAe8"
 // You MUST generate this using smartnode!
@@ -29,6 +32,16 @@
 _Static_assert(sizeof(PREFIX) <= sizeof(NODE_ADDRESS), "Prefix must be at most 20 chars");
 _Static_assert(sizeof(NODE_ADDRESS) == 43, "Invalid node address");
 _Static_assert(sizeof(MINIPOOL_MANAGER_ADDRESS) == 43, "Invalid minipool manager address");
+
+struct thread_ctx {
+	void *arena;
+	size_t id;
+	size_t nprocs;
+};
+
+static unsigned char prefix[ADDRESS_BYTES];
+static bool done = false;
+static uint64_t reported_salt;
 
 static unsigned char
 hex_to_char(char in)
@@ -101,68 +114,33 @@ prefix_cmp(const unsigned char *a, const unsigned char *b)
 	return (hi_a ^ hi_b) == 0x00 ? 0 : 1;
 }
 
-static inline unsigned char *
-hash_to_address(unsigned char result[static SALT_BYTES])
-{
-
-	return result + 12;
-}
+#define HASH_TO_ADDR(X) ((unsigned char *)((X) + 12))
 
 static inline void
-next_salt(unsigned char salt[static SALT_BYTES], uint32_t incr)
+print_salt(uint64_t salt)
 {
-	uint64_t hi = bswap_64(*(uint64_t *)(salt + 24));
-	uint64_t mhi = bswap_64(*(uint64_t *)(salt + 16));
-	uint64_t mlo = bswap_64(*(uint64_t *)(salt + 8));
-	uint64_t lo = bswap_64(*(uint64_t *)(salt));
-	uint8_t carry = 0;
+	bool first = true;
+	const unsigned char salt_data[8];
 
-	/* hi is the least significant word, since it was highest in memory */
-	if (UINT64_MAX - incr >= hi) {
-		hi += incr;
-		goto store;
+	*((uint64_t *)salt_data) = bswap_64(salt);
+	printf("0x");
+	for (size_t i = 0; i < 8; i++) {
+		if (first && salt_data[i] == 0)
+			continue;
+		first = false;
+		printf("%02x", salt_data[i]);
 	}
-
-	hi += incr;
-	incr = 1;
-
-	if (UINT64_MAX - incr >= mhi) {
-		mhi += incr;
-		goto store;
-	}
-
-	mhi += incr;
-
-	if (UINT64_MAX - incr >= mlo) {
-		mlo += incr;
-		goto store;
-	}
-
-	mlo += incr;
-
-	if (UINT64_MAX - incr >= lo) {
-		lo += incr;
-		goto store;
-	}
-
-store:
-	*((uint64_t *)salt) = bswap_64(lo);
-	*((uint64_t *)(salt + 8)) = bswap_64(mlo);
-	*((uint64_t *)(salt + 16)) = bswap_64(mhi);
-	*((uint64_t *)(salt + 24)) = bswap_64(hi);
 }
 
-bool
-iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phase1, unsigned char *phase2, unsigned char *salt)
+static inline bool
+iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phase1, unsigned char *phase2, uint64_t salt)
 {
 	unsigned char output[SALT_BYTES * 8];
 
 	KeccakP1600times8_InitializeAll(state);
 
-	memcpy(phase1 + ADDRESS_BYTES, salt, SALT_BYTES);
 	for (size_t i = 1; i < 8; i++) {
-		memcpy(phase1 + (i * 136) + ADDRESS_BYTES, phase1 + ((i-1) * 136) + ADDRESS_BYTES, SALT_BYTES);
-		next_salt(phase1 + (i * 136) + ADDRESS_BYTES, 1);
+		*((uint64_t *)(phase1 + (i * 136) + ADDRESS_BYTES + 24)) = bswap_64(salt + i);
 	}
 	KeccakP1600times8_AddLanesAll(state, phase1, 136 / LANE_SIZE, 136 / LANE_SIZE);
 	KeccakP1600times8_PermuteAll_24rounds(state);
@@ -179,22 +157,19 @@ iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phas
 	for (size_t j = 0; j < 8; j++) {
 		const unsigned char *addr;
 
-		addr = hash_to_address(output + 32*j);
+		addr = HASH_TO_ADDR(output + 32*j);
 
 		if (__builtin_expect((prefix_cmp(prefix, addr) == 0), 0)) {
-			next_salt(salt, j);
+			salt += j;
 			printf("Prefix matched\n");
 			printf("Address: 0x");
 			for (size_t i = 0; i < ADDRESS_BYTES; i++)
 				printf("%02x", addr[i]);
 			printf("\n");
-			printf("Salt: 0x");
-			for (size_t i = 0; i < SALT_BYTES; i++) {
-				if (i != SALT_BYTES - 1 && salt[i] == 0)
-					continue;
-				printf("%02x", salt[i]);
-			}
+			printf("Salt: ");
+			print_salt(salt);
 			printf("\n");
+			done = true;
 			return true;
 		}
 	}
@@ -202,32 +177,47 @@ iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phas
 	return false;
 }
 
-int
-thread_main(void)
+void *
+thread_main(void *arg)
 {
-	unsigned char salt[SALT_BYTES];
+	struct thread_ctx *ctx = arg;
+	uint64_t salt = ctx->id * 8;
+	unsigned char *mem = malloc(KeccakP1600times8_statesAlignment + KeccakP1600times8_statesSizeInBytes);
+	unsigned char *state = mem;
+	unsigned char *phase1 = ctx->arena;
+	unsigned char *phase2 = phase1 + 136 * 8;
+
+	while ((uintptr_t)state % KeccakP1600times8_statesAlignment != 0)
+		state += 1;
+
+	while (done == false && iteration(state, prefix, phase1, phase2, salt) == false) {
+		if (ctx->id == 0)
+			reported_salt = salt;
+		salt += 8 * ctx->nprocs;
+	}
+
+	free(mem);
+	free(ctx->arena);
+	free(ctx);
+	return NULL;
+}
+
+unsigned char *
+create_arena(void)
+{
+	unsigned char *out = calloc(136 * 8 * 2, sizeof(unsigned char));
 	unsigned char node_address[ADDRESS_BYTES];
 	unsigned char minipool_manager_address[ADDRESS_BYTES];
 	unsigned char init_hash[INIT_HASH_BYTES];
-	unsigned char prefix[ADDRESS_BYTES];
 	unsigned char ff = 0xff;
-	unsigned char *mem = malloc(KeccakP1600times8_statesAlignment + KeccakP1600times8_statesSizeInBytes);
-	unsigned char *state = mem;
-	while ((uintptr_t)state % KeccakP1600times8_statesAlignment != 0)
-		state += 2;
 
-	unsigned char phase1[136 * 8];
-	unsigned char phase2[136 * 8];
-
-	memset(salt, 0, SALT_BYTES);
-	memset(phase1, 0, sizeof(phase1));
-	memset(phase2, 0, sizeof(phase2));
+	unsigned char *phase1 = out;
+	unsigned char *phase2 = phase1 + 136 * 8;
 
 	parse_hex(node_address, NODE_ADDRESS, strlen(NODE_ADDRESS));
 	parse_hex(minipool_manager_address, MINIPOOL_MANAGER_ADDRESS,
 	    strlen(MINIPOOL_MANAGER_ADDRESS));
 	parse_hex(init_hash, INIT_HASH, strlen(INIT_HASH));
-	parsePrefix(prefix, PREFIX);
 
 	/* All ranges left-inclusive only */
 	for (size_t i = 0; i < 8; i++) {
@@ -254,18 +244,53 @@ thread_main(void)
 		phase2[i*136 + 135] = 0x80;
 	}
 
-	for (;;) {
-		if (iteration(state, prefix, phase1, phase2, salt))
-			return 0;
-		next_salt(salt, 8);
-	}
-
-	return 0;
+	return out;
 }
 
 int
 main(void)
 {
+	size_t nprocs = get_nprocs();
+	uint64_t last_reported_salt = 0;
+	time_t start = time(NULL);
 
-	return thread_main();
+	printf("Using %lu threads\n", nprocs);
+	pthread_t *threads = calloc(nprocs, sizeof(pthread_t));
+
+	parsePrefix(prefix, PREFIX);
+
+	for (size_t i = 0; i < nprocs; i++) {
+		struct thread_ctx *ctx = calloc(1, sizeof(struct thread_ctx));
+
+		ctx->id = i;
+		ctx->arena = create_arena();
+		ctx->nprocs = nprocs;
+
+		(void)pthread_create(&threads[i], NULL, thread_main, ctx);
+	}
+
+	while (done == false) {
+		time_t iter = time(NULL);
+		sleep(5);
+		{
+			time_t end = time(NULL);
+			uint64_t diff = reported_salt - last_reported_salt;
+			float rate = diff / (end - iter);
+			float elapsed = end - start;
+			const unsigned char salt_data[8];
+
+			last_reported_salt += diff;
+
+			printf("At salt ");
+			print_salt(last_reported_salt);
+			printf("... %0.2fs (%0.2fM salts/sec)\n", elapsed, rate / 1000000);
+		}
+	}
+
+	for (size_t i = 0; i < nprocs; i++) {
+		pthread_join(threads[i], NULL);
+	}
+
+	free(threads);
+	return 0;
 }
