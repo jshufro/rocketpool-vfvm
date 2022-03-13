@@ -42,6 +42,10 @@ First, run
 git submodule update --init
 ```
 to clone [XKCP](https://github.com/XKCP/XKCP).  
+Install dependencies with:  
+```bash
+sudo apt install xsltproc libjson-c-dev
+```
 Build the project with:
 ```bash
 make
