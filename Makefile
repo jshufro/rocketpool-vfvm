@@ -2,21 +2,18 @@
 
 .NOTPARALLEL:
 
-mine: ./XKCP/bin/generic64/libXKCP.so ./XKCP/bin/AVX/libXKCP.so ./XKCP/bin/AVX2/libXKCP.so ./XKCP/bin/AVX512/libXKCP.so  main.c
-	gcc main.c -O2 -o mine -I XKCP/bin/AVX2/libXKCP.so.headers -lpthread -LXKCP/bin/generic64 -l:libXKCP.so
+mine: main.c build/headers build/lib
+	gcc main.c -O2 -o mine -I build/headers -lpthread -ljson-c -L. -l:build/lib/libXKCP.so
 
-./XKCP/bin/AVX/libXKCP.so:
-	cd XKCP; make -j CFLAGS="-march=sandybridge -fpic" AVX/libXKCP.so
+build/headers: build/lib
 
-./XKCP/bin/AVX2/libXKCP.so:
-	cd XKCP; make -j CFLAGS="-march=skylake -fpic" AVX2/libXKCP.so
+build/lib: ./XKCP
+	./build-xkcp.sh
 
-./XKCP/bin/AVX512/libXKCP.so:
-	cd XKCP; make -j CFLAGS="-march=skylake-avx512 -fpic" AVX512/libXKCP.so
-
-./XKCP/bin/generic64/libXKCP.so:
-	cd XKCP; make -j generic64/libXKCP.so
+rocketpool: main.go rocketpool.go
+	go build -o rocketpool main.go rocketpool.go
 
 clean:
 	cd XKCP; make clean
+	rm -rf build
 	rm -f mine

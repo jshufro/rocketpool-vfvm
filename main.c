@@ -1,6 +1,8 @@
+#include <assert.h>
 #include <byteswap.h>
 #include <ctype.h>
 #include <errno.h>
+#include <json-c/json.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -12,27 +14,10 @@
 
 #include "KeccakP-1600-times8-SnP.h"
 
-// ----------- CONFIG VARIABLES -----------
-// This is the prefix you're searching for
-#define PREFIX "0x000001"
-// This is your node wallet address
-#define NODE_ADDRESS "0x152CC1dEb3f343384a5064Aa322c4CFf6b3fFAe8"
-// You MUST generate this using smartnode!
-#define INIT_HASH "0xddff5ce23a92998f2b0b270eda7afd877aa25c3df35a384f723656881fab1964"
-// This is the mainnet minipool manager contract address
-#define MINIPOOL_MANAGER_ADDRESS "0x6293b8abc1f36afb22406be5f96d893072a8cf3a"
-// -------------- END CONFIG --------------
-
 #define ADDRESS_BYTES 20
 #define SALT_BYTES 32
 #define INIT_HASH_BYTES 32
 #define LANE_SIZE 8
-// In half-bytes
-#define PREFIX_LENGTH (strlen(PREFIX) - 2)
-
-_Static_assert(sizeof(PREFIX) <= sizeof(NODE_ADDRESS), "Prefix must be at most 20 chars");
-_Static_assert(sizeof(NODE_ADDRESS) == 43, "Invalid node address");
-_Static_assert(sizeof(MINIPOOL_MANAGER_ADDRESS) == 43, "Invalid minipool manager address");
 
 struct thread_ctx {
 	void *arena;
@@ -40,6 +25,7 @@ struct thread_ctx {
 	size_t nprocs;
 };
 
+static uint8_t prefix_len;
 static unsigned char prefix[ADDRESS_BYTES];
 static bool done = false;
 static uint64_t reported_salt;
@@ -57,6 +43,21 @@ hex_to_char(char in)
 	return (char)(in - 'a' + 10);
 }
 
+static bool
+is_hex(char in)
+{
+	in = tolower(in);
+	if (in >= '0' && in <= '9') {
+		return true;
+	}
+
+	if (in >= 'a' && in <= 'f') {
+		return true;
+	}
+
+	return false;
+}
+
 static void
 parse_hex(unsigned char *dst, const char *in, size_t nstr)
 {
@@ -72,33 +73,55 @@ parse_hex(unsigned char *dst, const char *in, size_t nstr)
 	return;
 }
 
-static void
-parsePrefix(unsigned char *dst, const char *in)
+static int
+parse_prefix(const char *in)
 {
 	size_t len;
 	size_t max;
+	unsigned char *dst = prefix;
 	char *write_head = dst;
+
+	len = strlen(in);
+	if (len <= 2)
+		return -1;
+	if (in[0] != '0')
+		return -1;
+	if (in[1] != 'x')
+		return -1;
 
 	memset(dst, 0, ADDRESS_BYTES);
 
 	in = in + 2;
 	len = strlen(in);
+
+	if (len > 40)
+		return -1;
+
 	max = len % 2 == 0 ? len : len - 1;
 	for (size_t i = 0; i < max; i += 2) {
 		unsigned char hi = hex_to_char(in[i]);
 		unsigned char lo = hex_to_char(in[i + 1]);
 		unsigned char binary = (hi << 4) | lo;
 
+		if (is_hex(in[i]) == false ||
+		    is_hex(in[i + 1]) == false)
+			return -1;
+
 		*write_head = binary;
 		write_head++;
 	}
 
-	if (len % 2 == 0)
-		return;
+	if (len % 2 == 0) {
+		prefix_len = len;
+		return 0;
+	}
 
 	// If the prefix is an odd length, we need to copy the last half byte by hand.
+	if (is_hex(in[max]) == false)
+		return -1;
 	*write_head = hex_to_char(in[max]) << 4;
-	return;
+	prefix_len = len;
+	return 0;
 
 }
 
@@ -108,12 +131,12 @@ prefix_cmp(const unsigned char *a, const unsigned char *b)
 	char hi_a;
 	char hi_b;
 
-	if (PREFIX_LENGTH % 2 == 0)
-		return memcmp(a, b, PREFIX_LENGTH / 2);
-	if (memcmp(a, b, (PREFIX_LENGTH - 1) / 2) != 0)
+	if (prefix_len % 2 == 0)
+		return memcmp(a, b, prefix_len / 2);
+	if (memcmp(a, b, (prefix_len - 1) / 2) != 0)
 		return 1;
-	hi_a = a[(PREFIX_LENGTH - 1)/2] & 0xf0;
-	hi_b = b[(PREFIX_LENGTH - 1)/2] & 0xf0;
+	hi_a = a[(prefix_len - 1)/2] & 0xf0;
+	hi_b = b[(prefix_len - 1)/2] & 0xf0;
 	return (hi_a ^ hi_b) == 0x00 ? 0 : 1;
 }
 
@@ -206,8 +229,8 @@ thread_main(void *arg)
 	return NULL;
 }
 
-unsigned char *
-create_arena(void)
+static unsigned char *
+create_arena(const char *node_addr, const char *minipool_manager_addr, const char *init)
 {
 	unsigned char *out = calloc(136 * 8 * 2, sizeof(unsigned char));
 	unsigned char node_address[ADDRESS_BYTES];
@@ -218,10 +241,10 @@ create_arena(void)
 	unsigned char *phase1 = out;
 	unsigned char *phase2 = phase1 + 136 * 8;
 
-	parse_hex(node_address, NODE_ADDRESS, strlen(NODE_ADDRESS));
-	parse_hex(minipool_manager_address, MINIPOOL_MANAGER_ADDRESS,
-	    strlen(MINIPOOL_MANAGER_ADDRESS));
-	parse_hex(init_hash, INIT_HASH, strlen(INIT_HASH));
+	parse_hex(node_address, node_addr, strlen(minipool_manager_addr));
+	parse_hex(minipool_manager_address, minipool_manager_addr,
+	    strlen(minipool_manager_addr));
+	parse_hex(init_hash, init, strlen(init));
 
 	/* All ranges left-inclusive only */
 	for (size_t i = 0; i < 8; i++) {
@@ -251,24 +274,161 @@ create_arena(void)
 	return out;
 }
 
+static bool
+parse_json_file(const char **node_addr,
+    const char **minipool_manager_addr,
+    const char **init,
+    const char *deposit)
+{
+	FILE *f;
+	unsigned char *buf;
+	size_t buf_bytes;
+	size_t read;
+	struct json_object *json;
+	struct json_object *child;
+	struct json_object *string;
+
+	*node_addr = NULL;
+	*minipool_manager_addr = NULL;
+	*init = NULL;
+
+	f = fopen("rocketpool.json", "r");
+	if (f == NULL) {
+		printf("Could not read rocketpool.json\n");
+		return false;
+	}
+
+	fseek(f, 0L, SEEK_END);
+	buf_bytes = ftell(f);
+
+	fseek(f, 0L, SEEK_SET);
+	buf = calloc(buf_bytes, sizeof(unsigned char));
+
+	read = fread(buf, sizeof(unsigned char), buf_bytes, f);
+	if (read != buf_bytes) {
+		printf("Error reading rocketpool.json\n");
+		free(buf);
+		return false;
+	}
+	fclose(f);
+
+	json = json_tokener_parse(buf);
+	if (json == NULL) {
+		printf("Could not parse json\n");
+		free(buf);
+		return false;
+	}
+
+	child = json_object_object_get(json, deposit);
+	if (child == NULL) {
+		printf("Could not get settings for %s deposit\n", deposit);
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+
+	string = json_object_object_get(child, "nodeAddress");
+	if (string == NULL) {
+		printf("json data missing nodeAddress\n");
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+	*node_addr = json_object_get_string(string);
+
+	string = json_object_object_get(child, "minipoolManagerAddress");
+	if (string == NULL) {
+		printf("json data missing minipoolManagerAddress\n");
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+	*minipool_manager_addr = json_object_get_string(string);
+
+	string = json_object_object_get(child, "initHash");
+	if (string == NULL) {
+		printf("json data missing initHash\n");
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+	*init = json_object_get_string(string);
+
+	if (*init == NULL || *node_addr == NULL || *minipool_manager_addr == NULL) {
+		printf("json data corrupt\n");
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+
+	if (strlen(*node_addr) != 42) {
+		printf("json contains invalid node address: %s\n", *node_addr);
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+
+	if (strlen(*minipool_manager_addr) != 42) {
+		printf("json contains invalid minipool manager address: %s\n", *minipool_manager_addr);
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+
+	if (strlen(*init) != 66) {
+		printf("json contains invalid init hash: %s\n", *init);
+		json_object_put(json);
+		free(buf);
+		return false;
+	}
+
+	return true;
+}
+
 int
-main(void)
+main(int argc, char *argv[])
 {
 	size_t nprocs = get_nprocs();
 	uint64_t last_reported_salt = 0;
 	time_t start = time(NULL);
 	struct timespec ts = {};
+	const char *node_addr;
+	const char *minipool_manager_addr;
+	const char *init;
+	const char *deposit;
 
-	printf("Using %lu threads\n", nprocs);
+	if (argc != 3) {
+		printf("Usage: %s [deposit amount] [prefix]\ne.g. %s 16 0xbeef01\n",
+		    argv[0], argv[0]);
+		return 1;
+	}
+
+	/* First arg should be 16 or 32 */
+	if (strcmp(argv[1], "16") != 0 && strcmp(argv[1], "32") != 0) {
+		printf("Invalid despoit amount '%s'. 32 and 16 are the only valid amounts\n", argv[1]);
+		return 1;
+	}
+
+	deposit = argv[1];
+
+	/* Second arg should be a prefix */
+	if (parse_prefix(argv[2]) != 0) {
+		printf("Invalid prefix '%s'\n", argv[2]);
+		return 1;
+	}
+
+	/* Read the json file */
+	if (parse_json_file(&node_addr, &minipool_manager_addr, &init, deposit) == false)
+		return 1;
+
+	printf("Searching for %s using %lu threads\n", argv[2], nprocs);
 	pthread_t *threads = calloc(nprocs, sizeof(pthread_t));
-
-	parsePrefix(prefix, PREFIX);
 
 	for (size_t i = 0; i < nprocs; i++) {
 		struct thread_ctx *ctx = calloc(1, sizeof(struct thread_ctx));
 
 		ctx->id = i;
-		ctx->arena = create_arena();
+		ctx->arena = create_arena(node_addr, minipool_manager_addr, init);
 		ctx->nprocs = nprocs;
 
 		(void)pthread_create(&threads[i], NULL, thread_main, ctx);
