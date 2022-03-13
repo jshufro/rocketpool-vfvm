@@ -1,4 +1,4 @@
 build/
 rocketpool.json
-rocketpool
 mine
+*.swp
