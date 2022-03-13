@@ -44,7 +44,8 @@ git submodule update --init
 to clone [XKCP](https://github.com/XKCP/XKCP).  
 Install dependencies with:  
 ```bash
-sudo apt install xsltproc libjson-c-dev
+sudo apt update
+sudo apt install xsltproc libjson-c-dev make gcc
 ```
 Build the project with:
 ```bash
@@ -62,6 +63,9 @@ In testing, I found the following speedups over the embedded Rocket Pool vanity 
 * generic64: 20%
 * avx2: 100%
 * avx512: 1000%
+
+On a AWS c5.4xlarge, the miner processes 72 million salts per second.  
+On a c5.24xlarge, the miner processes 420 million salts per second.
 
 These performance gains come from two optimizations:
 1. No memory overhead. Mining does no allocations after intialization.
