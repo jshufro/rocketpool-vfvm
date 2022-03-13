@@ -68,7 +68,7 @@ On a AWS c5.4xlarge, the miner processes 72 million salts per second.
 On a c5.24xlarge, the miner processes 420 million salts per second.
 
 These performance gains come from two optimizations:
-1. No memory overhead. Mining does no allocations after intialization.
+1. No memory overhead. Mining does no allocations after initialization.
 2. AVX vectorization. SIMD intrinsics can test up to 8 salts at a time, per AVX unit. Many intel processors have 2 units per core.
 
 ## Contributing
