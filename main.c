@@ -31,6 +31,7 @@ static bool done = false;
 static uint64_t reported_salt;
 static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t mux = PTHREAD_MUTEX_INITIALIZER;
+static char *starting_salt;
 
 static unsigned char
 hex_to_char(char in)
@@ -58,16 +59,21 @@ is_hex(char in)
 	return false;
 }
 
+static unsigned char
+chars_to_byte(const char *in)
+{
+	unsigned char hi = hex_to_char(in[0]);
+	unsigned char lo = hex_to_char(in[0 + 1]);
+
+	return (hi << 4) | lo;
+}
+
 static void
 parse_hex(unsigned char *dst, const char *in, size_t nstr)
 {
 
 	for (size_t i = 2; i < nstr - 1; i += 2) {
-		unsigned char hi = hex_to_char(in[i]);
-		unsigned char lo = hex_to_char(in[i + 1]);
-		unsigned char binary = (hi << 4) | lo;
-
-		dst[i/2 - 1] = binary;
+		dst[i/2 - 1] = chars_to_byte(&in[i]);
 	}
 
 	return;
@@ -204,11 +210,33 @@ iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phas
 	return false;
 }
 
+static uint64_t
+parse_salt(void)
+{
+	uint64_t dst = 0;
+	unsigned char *dst_buf = (unsigned char *)&dst;
+	const unsigned char *buf = starting_salt;
+	size_t salt_len;
+
+	if (starting_salt == NULL)
+		return 0;
+
+	salt_len = strlen(starting_salt);
+
+	size_t idx = 0;
+	for (size_t i = salt_len - 2; i >= 2; i -= 2) {
+		dst_buf[idx] = chars_to_byte(&buf[i]);
+		idx++;
+	}
+
+	return dst - 1;
+}
+
 void *
 thread_main(void *arg)
 {
 	struct thread_ctx *ctx = arg;
-	uint64_t salt = ctx->id * 8;
+	uint64_t salt = parse_salt() + ctx->id * 8;
 	unsigned char *mem = malloc(KeccakP1600times8_statesAlignment + KeccakP1600times8_statesSizeInBytes);
 	unsigned char *state = mem;
 	unsigned char *phase1 = ctx->arena;
@@ -397,8 +425,8 @@ main(int argc, char *argv[])
 	const char *init;
 	const char *deposit;
 
-	if (argc != 3) {
-		printf("Usage: %s [deposit amount] [prefix]\ne.g. %s 16 0xbeef01\n",
+	if (argc != 3 && argc != 4) {
+		printf("Usage: %s [deposit amount] [prefix] [optional starting salt]\ne.g. %s 16 0xbeef01 0xffff\n",
 		    argv[0], argv[0]);
 		return 1;
 	}
@@ -415,6 +443,24 @@ main(int argc, char *argv[])
 	if (parse_prefix(argv[2]) != 0) {
 		printf("Invalid prefix '%s'\n", argv[2]);
 		return 1;
+	}
+
+	/* Third arg should be a starting salt, if it exists */
+	if (argc == 4) {
+		size_t salt_len = strlen(argv[3]);
+		if (salt_len <= 2 || salt_len % 2 != 0) {
+			printf("Invalid starting salt %s\n", argv[3]);
+			return 1;
+		}
+
+		for (size_t i = 2; i < salt_len; i++) {
+			if (is_hex(argv[3][i]) == true)
+				continue;
+			printf("Invalid starting salt %s\n", argv[3]);
+			return 1;
+		}
+	
+		starting_salt = argv[3];
 	}
 
 	/* Read the json file */
