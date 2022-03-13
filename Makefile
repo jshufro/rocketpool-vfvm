@@ -17,3 +17,4 @@ clean:
 	cd XKCP; make clean
 	rm -rf build
 	rm -f mine
+	rm -f rocketpool
