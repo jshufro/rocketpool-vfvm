@@ -2,6 +2,8 @@
 
 `vfvm` is a very-fast-vanity-miner for Rocket Pool.
 
+![wen poap](vfvm.png)
+
 ## Supported Platforms
 Currently, `vfvm` works on x86_64 Linux systems. It is compiled on-host to take advantage of [Advanced Vector Extensions](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions) and will use AVX512 or AVX2 if available, with a fallback generic x64 implementation if not.
 
