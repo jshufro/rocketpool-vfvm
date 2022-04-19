@@ -9,6 +9,12 @@ Currently, `vfvm` works on x86_64 Linux systems. It is compiled on-host to take 
 
 ARM64 and OSX support are under investigation.
 
+**WARNING**
+If you have generated `rocketpool.json` and/or pre-mined hashes, they may be antiquated by updates to Rocket Pool's smart contracts.
+These contract updates are rare, but as of this writing (2022-04-19), one is slated to happen soon.
+
+You will have to re-generate rocketpool.json (step 2) and re-mine your hashes (step 4) after each of these contract upgrades.
+
 ## Usage
 `vfvm` does not need to run on the same machine as your Rocket Pool node, however, it does need to query the rocketpool_api container for some data before it can begin mining.
 
@@ -18,12 +24,12 @@ On the machine you intend to do the mining, clone this repository:
 git clone https://github.com/jshufro/rocketpool-vfvm.git
 ```
 
-### 2a. Gather the vanity artifacts
-If you are going to be mining vanity salts on your node, simply run:  
+### 2. Gather the vanity artifacts
+**If you are going to be mining vanity salts on your node, simply run:**
 ```bash
 ./rocketpool.py > rocketpool.json
 ```
-If you are going to be mining vanity salts on a separate machine, you need to collect the artifacts from your node.
+**If you are going to be mining vanity salts on a separate machine, you need to collect the artifacts from your node.**
 
 SSH into your node and run:
 ```bash
@@ -53,7 +59,9 @@ Build the project with:
 ```bash
 make
 ```
-and begin mining:
+
+### 4. Mine a vanity hash
+Begin mining with:
 ```bash
 ./mine [16 or 32] [prefix] [optional starting salt]
 ```
