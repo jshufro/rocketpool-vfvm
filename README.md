@@ -9,7 +9,7 @@ Currently, `vfvm` works on x86_64 Linux systems. It is compiled on-host to take 
 
 ARM64 and OSX support are under investigation.
 
-**WARNING**
+## **WARNING**  
 If you have generated `rocketpool.json` and/or pre-mined hashes, they may be antiquated by updates to Rocket Pool's smart contracts.
 These contract updates are rare, but as of this writing (2022-04-19), one is slated to happen soon.
 
