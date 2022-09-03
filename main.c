@@ -258,20 +258,20 @@ thread_main(void *arg)
 }
 
 static unsigned char *
-create_arena(const char *node_addr, const char *minipool_manager_addr, const char *init)
+create_arena(const char *node_addr, const char *minipool_factory_addr, const char *init)
 {
 	unsigned char *out = calloc(136 * 8 * 2, sizeof(unsigned char));
 	unsigned char node_address[ADDRESS_BYTES];
-	unsigned char minipool_manager_address[ADDRESS_BYTES];
+	unsigned char minipool_factory_address[ADDRESS_BYTES];
 	unsigned char init_hash[INIT_HASH_BYTES];
 	unsigned char ff = 0xff;
 
 	unsigned char *phase1 = out;
 	unsigned char *phase2 = phase1 + 136 * 8;
 
-	parse_hex(node_address, node_addr, strlen(minipool_manager_addr));
-	parse_hex(minipool_manager_address, minipool_manager_addr,
-	    strlen(minipool_manager_addr));
+	parse_hex(node_address, node_addr, strlen(minipool_factory_addr));
+	parse_hex(minipool_factory_address, minipool_factory_addr,
+	    strlen(minipool_factory_addr));
 	parse_hex(init_hash, init, strlen(init));
 
 	/* All ranges left-inclusive only */
@@ -288,8 +288,8 @@ create_arena(const char *node_addr, const char *minipool_manager_addr, const cha
 	for (size_t i = 0; i < 8; i++) {
 		/* First byte is 0xff */
 		memcpy(phase2 + i*136, &ff, 1);
-		/* Bytes 1-21 are the minipool mgr address */
-		memcpy(phase2 + i*136 + 1, minipool_manager_address, ADDRESS_BYTES);
+		/* Bytes 1-21 are the minipool factory address */
+		memcpy(phase2 + i*136 + 1, minipool_factory_address, ADDRESS_BYTES);
 		/* 32 byte hole at bytes 21-53 */
 		/* Bytes 53-85 are init_hash */
 		memcpy(phase2 + i*136 + 1 + ADDRESS_BYTES + SALT_BYTES, init_hash, INIT_HASH_BYTES);
@@ -304,7 +304,7 @@ create_arena(const char *node_addr, const char *minipool_manager_addr, const cha
 
 static bool
 parse_json_file(const char **node_addr,
-    const char **minipool_manager_addr,
+    const char **minipool_factory_addr,
     const char **init,
     const char *deposit)
 {
@@ -317,7 +317,7 @@ parse_json_file(const char **node_addr,
 	struct json_object *string;
 
 	*node_addr = NULL;
-	*minipool_manager_addr = NULL;
+	*minipool_factory_addr = NULL;
 	*init = NULL;
 
 	f = fopen("rocketpool.json", "r");
@@ -364,14 +364,14 @@ parse_json_file(const char **node_addr,
 	}
 	*node_addr = json_object_get_string(string);
 
-	string = json_object_object_get(child, "minipoolManagerAddress");
+	string = json_object_object_get(child, "minipoolFactoryAddress");
 	if (string == NULL) {
-		printf("json data missing minipoolManagerAddress\n");
+		printf("json data missing minipoolFactoryAddress\n");
 		json_object_put(json);
 		free(buf);
 		return false;
 	}
-	*minipool_manager_addr = json_object_get_string(string);
+	*minipool_factory_addr = json_object_get_string(string);
 
 	string = json_object_object_get(child, "initHash");
 	if (string == NULL) {
@@ -382,7 +382,7 @@ parse_json_file(const char **node_addr,
 	}
 	*init = json_object_get_string(string);
 
-	if (*init == NULL || *node_addr == NULL || *minipool_manager_addr == NULL) {
+	if (*init == NULL || *node_addr == NULL || *minipool_factory_addr == NULL) {
 		printf("json data corrupt\n");
 		json_object_put(json);
 		free(buf);
@@ -396,8 +396,8 @@ parse_json_file(const char **node_addr,
 		return false;
 	}
 
-	if (strlen(*minipool_manager_addr) != 42) {
-		printf("json contains invalid minipool manager address: %s\n", *minipool_manager_addr);
+	if (strlen(*minipool_factory_addr) != 42) {
+		printf("json contains invalid minipool factory address: %s\n", *minipool_factory_addr);
 		json_object_put(json);
 		free(buf);
 		return false;
@@ -421,7 +421,7 @@ main(int argc, char *argv[])
 	time_t start = time(NULL);
 	struct timespec ts = {};
 	const char *node_addr;
-	const char *minipool_manager_addr;
+	const char *minipool_factory_addr;
 	const char *init;
 	const char *deposit;
 
@@ -464,7 +464,7 @@ main(int argc, char *argv[])
 	}
 
 	/* Read the json file */
-	if (parse_json_file(&node_addr, &minipool_manager_addr, &init, deposit) == false)
+	if (parse_json_file(&node_addr, &minipool_factory_addr, &init, deposit) == false)
 		return 1;
 
 	printf("Searching for %s using %lu threads\n", argv[2], nprocs);
@@ -474,7 +474,7 @@ main(int argc, char *argv[])
 		struct thread_ctx *ctx = calloc(1, sizeof(struct thread_ctx));
 
 		ctx->id = i;
-		ctx->arena = create_arena(node_addr, minipool_manager_addr, init);
+		ctx->arena = create_arena(node_addr, minipool_factory_addr, init);
 		ctx->nprocs = nprocs;
 
 		(void)pthread_create(&threads[i], NULL, thread_main, ctx);

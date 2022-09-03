@@ -11,7 +11,7 @@ ARM64 and OSX support are under investigation.
 
 ## **WARNING**  
 If you have generated `rocketpool.json` and/or pre-mined hashes, they may be antiquated by updates to Rocket Pool's smart contracts.
-These contract updates are rare, but as of this writing (2022-04-19), one is slated to happen soon.
+These contract updates are rare, but Redstone was released at the end of August, 2022. Any salts mined before this are now invalid.
 
 You will have to re-generate rocketpool.json (step 2) and re-mine your hashes (step 4) after each of these contract upgrades.
 
