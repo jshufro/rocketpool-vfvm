@@ -305,8 +305,7 @@ create_arena(const char *node_addr, const char *minipool_factory_addr, const cha
 static bool
 parse_json_file(const char **node_addr,
     const char **minipool_factory_addr,
-    const char **init,
-    const char *deposit)
+    const char **init)
 {
 	FILE *f;
 	unsigned char *buf;
@@ -347,9 +346,9 @@ parse_json_file(const char **node_addr,
 		return false;
 	}
 
-	child = json_object_object_get(json, deposit);
+	child = json_object_object_get(json, "atlas");
 	if (child == NULL) {
-		printf("Could not get settings for %s deposit\n", deposit);
+		printf("Could not get settings. Atlas body expected.\n");
 		json_object_put(json);
 		free(buf);
 		return false;
@@ -423,51 +422,42 @@ main(int argc, char *argv[])
 	const char *node_addr;
 	const char *minipool_factory_addr;
 	const char *init;
-	const char *deposit;
 
-	if (argc != 3 && argc != 4) {
-		printf("Usage: %s [deposit amount] [prefix] [optional starting salt]\ne.g. %s 16 0xbeef01 0xffff\n",
+	if (argc != 2 && argc != 3) {
+		printf("Usage: %s [prefix] [optional starting salt]\ne.g. %s 0xbeef01 0xffff\n",
 		    argv[0], argv[0]);
 		return 1;
 	}
 
-	/* First arg should be 16 or 32 */
-	if (strcmp(argv[1], "16") != 0 && strcmp(argv[1], "32") != 0) {
-		printf("Invalid despoit amount '%s'. 32 and 16 are the only valid amounts\n", argv[1]);
-		return 1;
-	}
-
-	deposit = argv[1];
-
-	/* Second arg should be a prefix */
-	if (parse_prefix(argv[2]) != 0) {
+	/* First arg should be a prefix */
+	if (parse_prefix(argv[1]) != 0) {
 		printf("Invalid prefix '%s'\n", argv[2]);
 		return 1;
 	}
 
 	/* Third arg should be a starting salt, if it exists */
-	if (argc == 4) {
-		size_t salt_len = strlen(argv[3]);
+	if (argc == 3) {
+		size_t salt_len = strlen(argv[2]);
 		if (salt_len <= 2 || salt_len % 2 != 0) {
-			printf("Invalid starting salt %s\n", argv[3]);
+			printf("Invalid starting salt %s\n", argv[2]);
 			return 1;
 		}
 
 		for (size_t i = 2; i < salt_len; i++) {
-			if (is_hex(argv[3][i]) == true)
+			if (is_hex(argv[2][i]) == true)
 				continue;
-			printf("Invalid starting salt %s\n", argv[3]);
+			printf("Invalid starting salt %s\n", argv[2]);
 			return 1;
 		}
 	
-		starting_salt = argv[3];
+		starting_salt = argv[2];
 	}
 
 	/* Read the json file */
-	if (parse_json_file(&node_addr, &minipool_factory_addr, &init, deposit) == false)
+	if (parse_json_file(&node_addr, &minipool_factory_addr, &init) == false)
 		return 1;
 
-	printf("Searching for %s using %lu threads\n", argv[2], nprocs);
+	printf("Searching for %s using %lu threads\n", argv[1], nprocs);
 	pthread_t *threads = calloc(nprocs, sizeof(pthread_t));
 
 	for (size_t i = 0; i < nprocs; i++) {

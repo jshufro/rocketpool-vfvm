@@ -29,7 +29,4 @@ def getArtifacts(d):
 
     return parsed
 
-half = getArtifacts("16")
-full = getArtifacts("32")
-
-print(json.dumps({"16": half, "32": full}, indent=4, sort_keys=True))
+print(json.dumps({"atlas": getArtifacts("16")}, indent=4, sort_keys=True))

@@ -11,8 +11,7 @@ ARM64 and OSX support are under investigation.
 
 ## **WARNING**  
 If you have generated `rocketpool.json` and/or pre-mined hashes, they may be antiquated by updates to Rocket Pool's smart contracts.
-These contract updates are rare, but Redstone was released at the end of August, 2022. Any salts mined before this are now invalid.  
-Additionally, a bugfix for the fee distributor contracts is slated to be released soon, which will again invalidate salts.
+These contract updates are rare, but Atlas will be released on April 18th at 00:00 UTC. Any salts mined before this will be made invalid.
 
 You will have to re-generate rocketpool.json (step 2) and re-mine your hashes (step 4) after each of these contract upgrades.
 
@@ -64,7 +63,7 @@ make
 ### 4. Mine a vanity hash
 Begin mining with:
 ```bash
-./mine [16 or 32] [prefix] [optional starting salt]
+./mine [prefix] [optional starting salt]
 ```
 
 Note that the salt cannot exceed UINT64_MAX (i.e. 0xffffffffffffffff) due to internal limitations, so pick a starting salt well below this value. It's recommended to start from nothing for all new prefix searches.
