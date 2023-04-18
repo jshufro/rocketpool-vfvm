@@ -451,6 +451,7 @@ main(int argc, char *argv[])
 		}
 	
 		starting_salt = argv[2];
+		last_reported_salt = parse_salt();
 	}
 
 	/* Read the json file */
