@@ -431,7 +431,7 @@ main(int argc, char *argv[])
 
 	/* First arg should be a prefix */
 	if (parse_prefix(argv[1]) != 0) {
-		printf("Invalid prefix '%s'\n", argv[2]);
+		printf("Invalid prefix '%s'\n", argv[1]);
 		return 1;
 	}
 
