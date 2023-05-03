@@ -60,6 +60,9 @@ Build the project with:
 make
 ```
 
+*NOTE*: If you want to include user-contributed plugins, build with `make PLUGINS=true` instead.
+See [plugins.md](plugins.md) for more information.
+
 ### 4. Mine a vanity hash
 Begin mining with:
 ```bash

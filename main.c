@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "KeccakP-1600-times8-SnP.h"
+#include "plugin.h"
 
 #define ADDRESS_BYTES 20
 #define SALT_BYTES 32
@@ -32,6 +33,10 @@ static uint64_t reported_salt;
 static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t mux = PTHREAD_MUTEX_INITIALIZER;
 static char *starting_salt;
+
+/* Plugins- registered via attribute constructor, in a unterminated append-only list */
+static struct plugin* plugins;
+static size_t plugins_len;
 
 static unsigned char
 hex_to_char(char in)
@@ -85,7 +90,7 @@ parse_prefix(const char *in)
 	size_t len;
 	size_t max;
 	unsigned char *dst = prefix;
-	char *write_head = dst;
+	unsigned char *write_head = dst;
 
 	len = strlen(in);
 	if (len <= 2)
@@ -164,6 +169,19 @@ print_salt(uint64_t salt)
 	}
 }
 
+static inline void
+on_iteration(const unsigned char * const addr, size_t addr_len)
+{
+
+	for (size_t i = 0; i < plugins_len; i++) {
+		struct plugin *plugin = &plugins[i];
+
+		plugin->on_iteration(addr, addr_len);
+	}
+
+	return;
+}
+
 static inline bool
 iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phase1, unsigned char *phase2, uint64_t salt)
 {
@@ -205,6 +223,8 @@ iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phas
 			pthread_cond_signal(&cond);
 			return true;
 		}
+
+		on_iteration(addr, ADDRESS_BYTES);
 	}
 
 	return false;
@@ -215,7 +235,7 @@ parse_salt(void)
 {
 	uint64_t dst = 0;
 	unsigned char *dst_buf = (unsigned char *)&dst;
-	const unsigned char *buf = starting_salt;
+	const char *buf = starting_salt;
 	size_t salt_len;
 
 	if (starting_salt == NULL)
@@ -308,7 +328,7 @@ parse_json_file(const char **node_addr,
     const char **init)
 {
 	FILE *f;
-	unsigned char *buf;
+	char *buf;
 	size_t buf_bytes;
 	size_t read;
 	struct json_object *json;
@@ -412,6 +432,37 @@ parse_json_file(const char **node_addr,
 	return true;
 }
 
+static bool
+on_init(const unsigned char * const prefix, uint8_t prefix_len)
+{
+	bool r;
+
+	for (size_t i = 0; i < plugins_len; i++) {
+		struct plugin *plugin = &plugins[i];
+
+		r = plugin->on_init(prefix, prefix_len);
+		if (r == false) {
+			printf("Plugin initialization failure\n");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static void
+on_progress(void)
+{
+
+	for (size_t i = 0; i < plugins_len; i++) {
+		struct plugin *plugin = &plugins[i];
+
+		plugin->on_progress();
+	}
+
+	return;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -459,6 +510,10 @@ main(int argc, char *argv[])
 		return 1;
 
 	printf("Searching for %s using %lu threads\n", argv[1], nprocs);
+
+	if (on_init(prefix, prefix_len) == false)
+		return 1;
+
 	pthread_t *threads = calloc(nprocs, sizeof(pthread_t));
 
 	for (size_t i = 0; i < nprocs; i++) {
@@ -482,13 +537,14 @@ main(int argc, char *argv[])
 			uint64_t diff = reported_salt - last_reported_salt;
 			float rate = diff / (end - iter);
 			float elapsed = end - start;
-			const unsigned char salt_data[8];
 
 			last_reported_salt += diff;
 
 			printf("At salt ");
 			print_salt(last_reported_salt);
 			printf("... %0.2fs (%0.2fM salts/sec)\n", elapsed, rate / 1000000);
+
+			on_progress();
 		} else if (done) {
 			pthread_mutex_unlock(&mux);
 			break;
@@ -500,5 +556,30 @@ main(int argc, char *argv[])
 	}
 
 	free(threads);
+	free(plugins);
 	return 0;
+}
+
+bool
+register_plugin(struct plugin *plugin)
+{
+	size_t new_length = plugins_len + 1;
+
+	if (plugin->on_init == NULL)
+		return false;
+
+	if (plugin->on_iteration == NULL)
+		return false;
+
+	if (plugin->on_progress == NULL)
+		return false;
+
+	plugins = realloc(plugins, sizeof(struct plugin)*new_length);
+	if (plugins == NULL) {
+		return false;
+	}
+	plugins_len = new_length;
+
+	memcpy(&plugins[new_length-1], plugin, sizeof(struct plugin));
+	return true;
 }
