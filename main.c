@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <json-c/json.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -170,13 +171,13 @@ print_salt(uint64_t salt)
 }
 
 static inline void
-on_iteration(const unsigned char * const addr, size_t addr_len)
+on_iteration(const unsigned char * const addr, size_t addr_len, const uint64_t salt)
 {
 
 	for (size_t i = 0; i < plugins_len; i++) {
 		struct plugin *plugin = &plugins[i];
 
-		plugin->on_iteration(addr, addr_len);
+		plugin->on_iteration(addr, addr_len, salt);
 	}
 
 	return;
@@ -224,7 +225,7 @@ iteration(unsigned char *state, const unsigned char *prefix, unsigned char *phas
 			return true;
 		}
 
-		on_iteration(addr, ADDRESS_BYTES);
+		on_iteration(addr, ADDRESS_BYTES, salt);
 	}
 
 	return false;
@@ -252,6 +253,17 @@ parse_salt(void)
 	return dst - 1;
 }
 
+void
+thread_mask_sig(void)
+{
+	sigset_t mask;
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGINT);
+
+	pthread_sigmask(SIG_BLOCK, &mask, NULL);
+	return;
+}
+
 void *
 thread_main(void *arg)
 {
@@ -261,6 +273,8 @@ thread_main(void *arg)
 	unsigned char *state = mem;
 	unsigned char *phase1 = ctx->arena;
 	unsigned char *phase2 = phase1 + 136 * 8;
+
+	thread_mask_sig();
 
 	while ((uintptr_t)state % KeccakP1600times8_statesAlignment != 0)
 		state += 1;
@@ -451,6 +465,21 @@ on_init(const unsigned char * const prefix, uint8_t prefix_len)
 }
 
 static void
+on_interrupt()
+{
+
+	for (size_t i = 0; i < plugins_len; i++) {
+		struct plugin *plugin = &plugins[i];
+
+		if (plugin->on_interrupt != NULL) {
+			plugin->on_interrupt();
+		}
+	}
+
+	return;
+}
+
+static void
 on_progress(void)
 {
 
@@ -463,6 +492,16 @@ on_progress(void)
 	return;
 }
 
+static void
+handle_sigint(int signum)
+{
+
+	printf("Ctrl-c pressed, user abort...\n");
+	on_interrupt();
+
+	raise (signum); // triggers normal sigint handler
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -470,6 +509,7 @@ main(int argc, char *argv[])
 	uint64_t last_reported_salt = 0;
 	time_t start = time(NULL);
 	struct timespec ts = {};
+	struct sigaction sa = {};
 	const char *node_addr;
 	const char *minipool_factory_addr;
 	const char *init;
@@ -500,7 +540,7 @@ main(int argc, char *argv[])
 			printf("Invalid starting salt %s\n", argv[2]);
 			return 1;
 		}
-	
+
 		starting_salt = argv[2];
 		last_reported_salt = parse_salt();
 	}
@@ -513,6 +553,12 @@ main(int argc, char *argv[])
 
 	if (on_init(prefix, prefix_len) == false)
 		return 1;
+
+	/* Set up signal handler for SIGINT (ctrl-c) */
+	sa.sa_handler = handle_sigint;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_RESETHAND;
+	sigaction(SIGINT, &sa, NULL);
 
 	pthread_t *threads = calloc(nprocs, sizeof(pthread_t));
 

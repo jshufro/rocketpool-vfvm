@@ -20,6 +20,20 @@ on_init(const unsigned char * const prefix, uint8_t prefix_len)
 }
 
 /*
+ * Called when SIGINT is thrown, normally when CTRL-c is presesd.
+ * Optional, set to NULL if not needed.
+ * Will be the last thing called before program exit.
+ */
+static void
+on_interrupt(void)
+{
+
+	//PRINTF("CTRL-c: User abort!\n");
+	return;
+}
+
+
+/*
  * Called each time a new address is mined.
  * This function is called by the worker thread, and its pointer argument(s)
  * are ephemeral. Don't do any allocations here, or you risk damaging
@@ -51,6 +65,7 @@ on_progress(void)
 
 static struct plugin plugin = {
 	.on_init = on_init,
+	.on_interrupt = on_interrrupt,
 	.on_iteration = on_iteration,
 	.on_progress = on_progress
 };
