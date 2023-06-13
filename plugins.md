@@ -2,7 +2,7 @@
 
 VFVM has first-class support for plugins.
 
-As of now, there are none.
+As of now, there is only one- partial match output, which prints progressively longer prefix matches as the target address is mined.
 
 ## Developing Plugins
 
