@@ -529,8 +529,19 @@ main(int argc, char *argv[])
 	/* Third arg should be a starting salt, if it exists */
 	if (argc == 3) {
 		size_t salt_len = strlen(argv[2]);
+
 		if (salt_len <= 2 || salt_len % 2 != 0) {
 			printf("Invalid starting salt %s\n", argv[2]);
+			return 1;
+		}
+
+		if (salt_len > 2 + sizeof(uint64_t) * 2) {
+			printf("Invalid starting salt (too long) %s\n", argv[2]);
+			return 1;
+		}
+
+		if (strncmp(argv[2], "0x", 2) != 0) {
+			printf("Invalid starting salt (missing 0x prefix) %s\n", argv[2]);
 			return 1;
 		}
 
